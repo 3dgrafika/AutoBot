@@ -8,7 +8,7 @@ data class Step(var type: String, var p: MutableMap<String, String> = mutableMap
                 var body: MutableList<Step> = mutableListOf(), var els: MutableList<Step> = mutableListOf())
 data class Script(var name: String, var steps: MutableList<Step> = mutableListOf())
 
-/** Wszystko zapisywane lokalnie w filesDir: scripts/*.json (makra i algorytmy), patterns/*.png */
+/** Wszystko zapisywane lokalnie w filesDir: pliki JSON skryptow oraz obrazy PNG wzorcow. */
 object Store {
     private val g = Gson()
     private fun dir(c: Context, n: String) = File(c.filesDir, n).apply { mkdirs() }
