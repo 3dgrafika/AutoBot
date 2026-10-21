@@ -119,33 +119,60 @@ class BotService : AccessibilityService() {
 
     /** Najpierw mały panel z przyciskiem START: można przełączyć się na docelową aplikację, nagrywanie rusza po jego naciśnięciu. */
     fun record(done: (List<Step>) -> Unit) = ui.post {
-        val panel = LinearLayout(this)
-        panel.addView(Button(this).apply { text = "● START NAGRYWANIA"; setOnClickListener { wm.removeView(panel); beginRecording(done) } })
-        panel.addView(Button(this).apply { text = "✕"; setOnClickListener { wm.removeView(panel) } })
-        wm.addView(panel, LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
-            .apply { gravity = Gravity.TOP or Gravity.END })
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(0xEE20252B.toInt())
+        }
+        val lp = LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+            .apply { gravity = Gravity.TOP or Gravity.END; x = 20; y = 180 }
+        var ox = 0; var oy = 0; var dx = 0f; var dy = 0f
+        panel.addView(TextView(this).apply {
+            text = "☰"; textSize = 20f; setTextColor(Color.WHITE); setPadding(14, 8, 14, 8)
+            setOnTouchListener { _, e ->
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { ox = lp.x; oy = lp.y; dx = e.rawX; dy = e.rawY }
+                    MotionEvent.ACTION_MOVE -> { lp.x = (ox + e.rawX - dx).toInt(); lp.y = (oy + e.rawY - dy).toInt(); runCatching { wm.updateViewLayout(panel, lp) } }
+                }
+                true
+            }
+        })
+        panel.addView(Button(this).apply { text = "● START NAGRYWANIA"; setOnClickListener { runCatching { wm.removeView(panel) }; beginRecording(done) } })
+        panel.addView(Button(this).apply { text = "✕"; setOnClickListener { runCatching { wm.removeView(panel) } } })
+        wm.addView(panel, lp)
     }
 
     /** Nakładka łapie gest, zapisuje go i od razu odtwarza pod spodem, więc można normalnie nawigować po aplikacji. */
     private fun beginRecording(done: (List<Step>) -> Unit) {
         val steps = mutableListOf<Step>(); var lastUp = 0L; var t0 = 0L; var sx = 0f; var sy = 0f
+        var replaying = false
+        var tracking = false
         val root = FrameLayout(this)
         val lp = LP(-1, -1, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE or LP.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
         val v = View(this).apply { setBackgroundColor(0x22FF0000) }
         v.setOnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; t0 = SystemClock.uptimeMillis() }
+                MotionEvent.ACTION_DOWN -> {
+                    if (!replaying) { sx = e.rawX; sy = e.rawY; t0 = SystemClock.uptimeMillis(); tracking = true }
+                }
                 MotionEvent.ACTION_UP -> {
+                    if (!tracking || replaying) return@setOnTouchListener true
+                    tracking = false
                     val now = SystemClock.uptimeMillis(); val dur = (now - t0).coerceAtLeast(1)
                     if (lastUp > 0 && t0 - lastUp > 50) steps.add(Step("wait", mutableMapOf("ms" to (t0 - lastUp).toString())))
                     lastUp = now
                     val ex = e.rawX; val ey = e.rawY
                     steps.add(if (hypot(ex - sx, ey - sy) < 30) Step("tap", mutableMapOf("x" to sx.toInt().toString(), "y" to sy.toInt().toString(), "ms" to dur.toString()))
                     else Step("swipe", mutableMapOf("x1" to sx.toInt().toString(), "y1" to sy.toInt().toString(), "x2" to ex.toInt().toString(), "y2" to ey.toInt().toString(), "ms" to dur.toString())))
-                    lp.flags = lp.flags or LP.FLAG_NOT_TOUCHABLE; wm.updateViewLayout(root, lp)
+                    replaying = true
+                    lp.flags = lp.flags or LP.FLAG_NOT_TOUCHABLE
+                    runCatching { wm.updateViewLayout(root, lp) }
                     CoroutineScope(Dispatchers.Main).launch {
-                        gesture(sx, sy, ex, ey, dur)
-                        lp.flags = lp.flags and LP.FLAG_NOT_TOUCHABLE.inv(); wm.updateViewLayout(root, lp)
+                        try { gesture(sx, sy, ex, ey, dur) }
+                        finally {
+                            lp.flags = lp.flags and LP.FLAG_NOT_TOUCHABLE.inv()
+                            runCatching { wm.updateViewLayout(root, lp) }
+                            replaying = false
+                        }
                     }
                 }
             }; true

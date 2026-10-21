@@ -14,7 +14,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.items\nimport androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -96,6 +96,8 @@ fun App(a: MainActivity) {
 fun BotTab(a: MainActivity, open: (Script) -> Unit) {
     var scripts by remember { mutableStateOf(Store.orderedAlgorithms(a)) }
     var selected by remember { mutableStateOf(Store.selectedAlgorithms(a, scripts)) }
+    var renaming by remember { mutableStateOf<Script?>(null) }
+    var renameStatus by remember { mutableStateOf("") }
     val running by Engine.running.collectAsState()
 
     fun refresh() {
@@ -146,11 +148,11 @@ fun BotTab(a: MainActivity, open: (Script) -> Unit) {
             items(scripts, key = { it.name }) { script ->
                 val index = scripts.indexOfFirst { it.name == script.name }
                 Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Checkbox(
                             checked = script.name in selected,
                             onCheckedChange = { checked ->
@@ -159,9 +161,12 @@ fun BotTab(a: MainActivity, open: (Script) -> Unit) {
                             }
                         )
                         Column(Modifier.weight(1f).clickable { open(script) }.padding(vertical = 6.dp)) {
-                            Text(script.name, fontWeight = FontWeight.Medium)
+                            Text(script.name, fontWeight = FontWeight.Medium, maxLines = 3)
                             Text("${script.steps.size} bloków", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                      }
+                      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { renaming = script }) { Text("Zmień nazwę") }
                         TextButton(onClick = {
                             if (index > 0) {
                                 val reordered = scripts.toMutableList()
@@ -185,11 +190,23 @@ fun BotTab(a: MainActivity, open: (Script) -> Unit) {
                             Store.delete(a, script.name)
                             refresh()
                         }) { Text("Usuń", color = MaterialTheme.colorScheme.error) }
+                      }
                     }
                 }
             }
         }
     }
+    renaming?.let { old ->
+        NameDialog("Zmień nazwę algorytmu") { newName ->
+            if (!newName.isNullOrBlank()) {
+                val ok = Store.renameScript(a, old.name, newName)
+                renameStatus = if (ok) "Zmieniono nazwę algorytmu." else "Ta nazwa jest pusta lub zajęta."
+                refresh()
+            }
+            renaming = null
+        }
+    }
+    if (renameStatus.isNotBlank()) AlertDialog(onDismissRequest = { renameStatus = "" }, title = { Text("Algorytm") }, text = { Text(renameStatus) }, confirmButton = { TextButton(onClick = { renameStatus = "" }) { Text("OK") } })
 }
 
 @Composable
@@ -268,20 +285,30 @@ fun Macros(a: MainActivity, open: (Script) -> Unit) {
 @Composable
 fun Editor(a: MainActivity, s: Script, close: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
+    var renameOpen by remember { mutableStateOf(false) }
     var patternTarget by remember { mutableStateOf<Step?>(null) }
     var macroTarget by remember { mutableStateOf<Step?>(null) }
     Column(Modifier.fillMaxSize()) {
-        Text(if (s.kind == "macro") "Edytuj makro: ${s.name}" else "Edytuj algorytm: ${s.name}", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (s.kind == "macro") s.name else s.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            TextButton(onClick = { renameOpen = true }) { Text("Zmień nazwę") }
+        }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { Store.save(a, s); close() }, modifier = Modifier.weight(1f)) { Text("Zapisz i wróć") }
             OutlinedButton(onClick = close) { Text("Anuluj") }
         }
         Spacer(Modifier.height(8.dp))
-        key(version) {
-            LazyColumn(Modifier.fillMaxSize()) {
-                item { Steps(a, s.steps, 0, { version++ }, { patternTarget = it }, { macroTarget = it }) }
+        val scrollState = rememberLazyListState()
+        LazyColumn(state = scrollState, modifier = Modifier.fillMaxSize()) {
+            item { Steps(a, s.steps, 0, { version++ }, { patternTarget = it }, { macroTarget = it }) }
+        }
+        if (renameOpen) NameDialog("Zmień nazwę") { newName ->
+            if (!newName.isNullOrBlank()) {
+                val oldName = s.name
+                if (Store.renameScript(a, oldName, newName)) s.name = Store.clean(newName)
             }
+            renameOpen = false
         }
         patternTarget?.let { target ->
             PickerDialog(a, onPick = { value -> target.p["name"] = value; patternTarget = null; version++ }, onDismiss = { patternTarget = null })
@@ -303,13 +330,15 @@ fun Steps(
 ) {
     Column(Modifier.padding(start = (depth * 10).dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         list.toList().forEachIndexed { index, step ->
-            var collapsed by remember(step) { mutableStateOf(false) }
+            var collapsed by remember(step) { mutableStateOf(true) }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(BLOCK_INFO.firstOrNull { it.type == step.type }?.icon ?: "▫️")
-                        Text(blockTitle(step.type), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                        TextButton(onClick = { collapsed = !collapsed }) { Text(if (collapsed) "Rozwiń" else "Zwiń") }
+                        Column(Modifier.weight(1f)) {
+                            Text(step.p["_label"]?.takeIf { it.isNotBlank() } ?: blockTitle(step.type), fontWeight = FontWeight.SemiBold, maxLines = 3)
+                            TextButton(onClick = { collapsed = !collapsed }, contentPadding = PaddingValues(0.dp)) { Text(if (collapsed) "ROZWIŃ  +" else "ZWIŃ  −") }
+                        }
                         TextButton(onClick = {
                             if (index > 0) {
                                 val item = list.removeAt(index)
@@ -326,15 +355,9 @@ fun Steps(
                         }, enabled = index < list.lastIndex) { Text("↓") }
                         TextButton(onClick = { list.remove(step); changed() }) { Text("✕", color = MaterialTheme.colorScheme.error) }
                     }
-                    var comment by remember(step) { mutableStateOf(step.p["_comment"].orEmpty()) }
-                    OutlinedTextField(
-                        value = comment,
-                        onValueChange = { comment = it; step.p["_comment"] = it },
-                        label = { Text("Komentarz (opcjonalnie)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
                     if (!collapsed) {
+                        var blockLabel by remember(step) { mutableStateOf(step.p["_label"].orEmpty()) }
+                        OutlinedTextField(value = blockLabel, onValueChange = { blockLabel = it; if (it.isBlank()) step.p.remove("_label") else step.p["_label"] = it }, label = { Text("Własna nazwa bloku (opcjonalnie)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         if (step.type in setOf("tap", "swipe", "macro")) {
                             OutlinedButton(
                                 onClick = {
@@ -371,7 +394,7 @@ fun Steps(
                                 })
                             }
                         }
-                        step.p.keys.filter { it != "_comment" }.toList().forEach { key ->
+                        step.p.keys.filter { it != "_comment" && it != "_label" }.toList().forEach { key ->
                             var value by remember(step, key) { mutableStateOf(step.p[key].orEmpty()) }
                             when {
                                 key == "name" && step.type in IMG -> {

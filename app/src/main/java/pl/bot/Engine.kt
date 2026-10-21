@@ -60,8 +60,8 @@ object Engine {
                 for (s in steps) {
                     tick()
                     val p = s.p
-                    val details = p.filterKeys { it != "_comment" }.values.joinToString(",")
-                    log("${blockTitle(s.type)}${if (details.isBlank()) "" else " $details"}${p["_comment"]?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""}")
+                    val details = p.filterKeys { it != "_comment" && it != "_label" }.values.joinToString(",")
+                    log("${p["_label"]?.takeIf { it.isNotBlank() } ?: blockTitle(s.type)}${if (details.isBlank()) "" else " $details"}")
                     when (s.type) {
                         "tap" -> {
                             val x = p["x"]!!.toFloat(); val y = p["y"]!!.toFloat()
