@@ -98,22 +98,67 @@ class MainActivity : ComponentActivity() {
             Button({ Store.save(a, s); BotService.inst?.showControl(s); a.moveTaskToBack(true) }, enabled = BotService.inst != null) { Text("📌") }
             Button({ Engine.stop() }) { Text("STOP") }
         }
-        key(ver) { LazyColumn { item { Steps(s.steps, 0) { ver++ } } } }
+        key(ver) { LazyColumn { item { Steps(a, s.steps, 0) { ver++ } } } }
     }
 }
 
-@Composable fun Steps(l: MutableList<Step>, d: Int, ch: () -> Unit) {
+@Composable fun Steps(a: MainActivity, l: MutableList<Step>, d: Int, ch: () -> Unit) {
     Column(Modifier.padding(start = (d * 12).dp)) {
         l.toList().forEach { st ->
             Card(Modifier.fillMaxWidth().padding(2.dp)) { Column(Modifier.padding(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Text(st.type, Modifier.weight(1f)); TextButton({ l.remove(st); ch() }) { Text("✕") } }
+                if (st.type in setOf("tap", "swipe", "macro")) {
+                    Button(onClick = {
+                        val service = BotService.inst
+                        if (service != null) {
+                            service.record { recorded ->
+                                when (st.type) {
+                                    "tap" -> recorded.firstOrNull { it.type == "tap" }?.let { r ->
+                                        st.p["x"] = r.p["x"] ?: st.p["x"].orEmpty()
+                                        st.p["y"] = r.p["y"] ?: st.p["y"].orEmpty()
+                                        st.p["ms"] = r.p["ms"] ?: st.p["ms"].orEmpty()
+                                        ch()
+                                    }
+                                    "swipe" -> recorded.firstOrNull { it.type == "swipe" }?.let { r ->
+                                        listOf("x1", "y1", "x2", "y2", "ms").forEach { k -> r.p[k]?.let { st.p[k] = it } }
+                                        ch()
+                                    }
+                                    "macro" -> if (recorded.isNotEmpty()) {
+                                        val existing = Store.list(a)
+                                        var n = 1
+                                        while (existing.any { it.name == "makro$n" }) n++
+                                        val macroName = "makro$n"
+                                        Store.save(a, Script(macroName, recorded.toMutableList()))
+                                        st.p["name"] = macroName
+                                        ch()
+                                    }
+                                }
+                            }
+                            a.moveTaskToBack(true)
+                        }
+                    }, enabled = BotService.inst != null, modifier = Modifier.fillMaxWidth()) {
+                        Text(when (st.type) {
+                            "tap" -> "● Nagraj punkt dotknięcia"
+                            "swipe" -> "● Nagraj gest przesunięcia"
+                            else -> "● Nagraj makro"
+                        })
+                    }
+                    Text(
+                        when (st.type) {
+                            "tap" -> "Uruchomi nakładkę; nagranie pierwszego dotknięcia uzupełni x, y i czas."
+                            "swipe" -> "Uruchomi nakładkę; nagrany gest przesunięcia uzupełni współrzędne."
+                            else -> "Nagranie zostanie zapisane jako makro i przypisane do tego bloku."
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 Row { st.p.keys.toList().forEach { k -> var v by remember { mutableStateOf(st.p[k]!!) }
                     if (k == "name" && st.type in IMG) { var dlg by remember { mutableStateOf(false) }
                         OutlinedButton({ dlg = true }, Modifier.weight(1f)) { Text(if (v.isBlank()) "wybierz wzorzec…" else v) }
                         if (dlg) PickerDialog(LocalContext.current as MainActivity, { v = it; st.p[k] = it; dlg = false }) { dlg = false }
                     } else OutlinedTextField(v, { v = it; st.p[k] = it }, label = { Text(k) }, modifier = Modifier.weight(1f), singleLine = true) } }
-                if (st.type in BLOCKS) { Steps(st.body, d + 1, ch)
-                    if (st.type == "if_img") { Text("w przeciwnym razie:"); Steps(st.els, d + 1, ch) } }
+                if (st.type in BLOCKS) { Steps(a, st.body, d + 1, ch)
+                    if (st.type == "if_img") { Text("w przeciwnym razie:"); Steps(a, st.els, d + 1, ch) } }
             } }
         }
         var m by remember { mutableStateOf(false) }
