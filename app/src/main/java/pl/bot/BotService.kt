@@ -51,8 +51,17 @@ class BotService : AccessibilityService() {
     }
     fun hideStop() = ui.post { stopV?.let { wm.removeView(it) }; stopV = null }
 
-    /** Nagrywanie: nakładka łapie gest, zapisuje go i od razu odtwarza pod spodem, więc można nawigować po aplikacji. */
+    /** Najpierw mały panel z przyciskiem START: można przełączyć się na docelową aplikację, nagrywanie rusza po jego naciśnięciu. */
     fun record(done: (List<Step>) -> Unit) = ui.post {
+        val panel = LinearLayout(this)
+        panel.addView(Button(this).apply { text = "● START NAGRYWANIA"; setOnClickListener { wm.removeView(panel); beginRecording(done) } })
+        panel.addView(Button(this).apply { text = "✕"; setOnClickListener { wm.removeView(panel) } })
+        wm.addView(panel, LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+            .apply { gravity = Gravity.TOP or Gravity.END })
+    }
+
+    /** Nakładka łapie gest, zapisuje go i od razu odtwarza pod spodem, więc można normalnie nawigować po aplikacji. */
+    private fun beginRecording(done: (List<Step>) -> Unit) {
         val steps = mutableListOf<Step>(); var lastUp = 0L; var t0 = 0L; var sx = 0f; var sy = 0f
         val root = FrameLayout(this)
         val lp = LP(-1, -1, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE or LP.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT)
