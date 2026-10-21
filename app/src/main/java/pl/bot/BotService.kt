@@ -34,8 +34,8 @@ class BotService : AccessibilityService() {
 
     /** Zrzut ekranu bez MediaProjection (Android 11+). System ogranicza częstotliwość do ok. 1/s. */
     suspend fun shot(): Bitmap? {
-        ui.post { ctrl?.alpha = 0f; stopV?.alpha = 0f }; delay(120)
-        try { return rawShot() } finally { ui.post { ctrl?.alpha = 1f; stopV?.alpha = 1f } }
+        ui.post { stopV?.alpha = 0f; launcher?.alpha = 0f }; delay(120)
+        try { return rawShot() } finally { ui.post { stopV?.alpha = 1f; launcher?.alpha = 1f } }
     }
     private suspend fun rawShot(): Bitmap? = suspendCancellableCoroutine { c ->
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
@@ -49,78 +49,73 @@ class BotService : AccessibilityService() {
 
     private var stopV: View? = null
     fun showStop() = ui.post {
-        if (stopV != null || ctrl != null) return@post
+        if (stopV != null || launcher != null) return@post
         val b = Button(this).apply { text = "■ STOP"; setOnClickListener { Engine.stop() } }
         wm.addView(b, LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
             .apply { gravity = Gravity.TOP or Gravity.END }); stopV = b
     }
     fun hideStop() = ui.post { stopV?.let { wm.removeView(it) }; stopV = null }
 
-    private var ctrl: View? = null
+    private var launcher: View? = null
 
-    /** Pływająca nakładka PLAY/STOP dla wszystkich zaznaczonych algorytmów. */
-    fun showBotControls() = ui.post {
-        hideControl()
+    /** Floating START BOT overlay; the selected algorithms run only after the user presses START BOT. */
+    fun showBotLauncher(scripts: List<Script>) = ui.post {
+        launcher?.let { old -> (old.tag as? Job)?.cancel(); runCatching { wm.removeView(old) } }
+        launcher = null
+        stopV?.let { runCatching { wm.removeView(it) } }; stopV = null
+        val lp = LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+            .apply { gravity = Gravity.TOP or Gravity.END; x = 20; y = 180 }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(8, 6, 8, 6)
-            setBackgroundColor(0xDD222222.toInt())
+            setPadding(4, 4, 4, 4)
+            setBackgroundColor(0xEE20252B.toInt())
         }
-        val lp = LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
-            .apply { gravity = Gravity.TOP or Gravity.START; x = 16; y = 160 }
         var ox = 0; var oy = 0; var dx = 0f; var dy = 0f
         val handle = TextView(this).apply {
-            text = "☰"; textSize = 20f; setTextColor(Color.WHITE); setPadding(12, 8, 12, 8)
+            text = "☰"; textSize = 20f; setTextColor(Color.WHITE); setPadding(16, 8, 16, 8)
             setOnTouchListener { _, e ->
                 when (e.actionMasked) {
                     MotionEvent.ACTION_DOWN -> { ox = lp.x; oy = lp.y; dx = e.rawX; dy = e.rawY }
-                    MotionEvent.ACTION_MOVE -> {
-                        lp.x = (ox + e.rawX - dx).toInt(); lp.y = (oy + e.rawY - dy).toInt()
-                        runCatching { wm.updateViewLayout(panel, lp) }
-                    }
-                }; true
-            }
-        }
-        val play = Button(this).apply {
-            text = "▶ PLAY"
-            setOnClickListener {
-                if (!Engine.running.value) {
-                    Engine.startSequence(applicationContext, Store.enabledAlgorithms(applicationContext).toList())
+                    MotionEvent.ACTION_MOVE -> { lp.x = (ox + e.rawX - dx).toInt(); lp.y = (oy + e.rawY - dy).toInt(); runCatching { wm.updateViewLayout(panel, lp) } }
                 }
+                true
             }
         }
-        val stop = Button(this).apply { text = "■ STOP"; setOnClickListener { Engine.stop() } }
-        val close = Button(this).apply { text = "✕"; setOnClickListener { Engine.stop(); hideControl() } }
-        listOf(handle, play, stop, close).forEach { panel.addView(it) }
-        wm.addView(panel, lp)
-        ctrl = panel
-    }
-
-
-    /** Pływająca nakładka sterująca (przesuwana za uchwyt ☰): ▶ uruchom algorytm / ■ STOP, ⏸ pauza, ✕ zamknij. */
-    fun showControl(script: Script) = ui.post {
-        hideControl(); stopV?.let { wm.removeView(it) }; stopV = null
-        val lp = LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
-            .apply { gravity = Gravity.TOP or Gravity.START; x = 20; y = 200 }
-        val panel = LinearLayout(this)
-        var ox = 0; var oy = 0; var dx = 0f; var dy = 0f
-        val handle = TextView(this).apply { text = "☰"; textSize = 22f; setTextColor(Color.WHITE); setBackgroundColor(0xCC333333.toInt()); setPadding(24, 8, 24, 8)
-            setOnTouchListener { _, e -> when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { ox = lp.x; oy = lp.y; dx = e.rawX; dy = e.rawY }
-                MotionEvent.ACTION_MOVE -> { lp.x = (ox + e.rawX - dx).toInt(); lp.y = (oy + e.rawY - dy).toInt(); wm.updateViewLayout(panel, lp) } }; true } }
-        val run = Button(this).apply { setOnClickListener {
-            if (Engine.running.value) Engine.stop()
-            else Engine.start(applicationContext, Store.list(applicationContext).firstOrNull { it.name == script.name } ?: script) } }
-        val pause = Button(this).apply { setOnClickListener { Engine.paused.value = !Engine.paused.value } }
-        val close = Button(this).apply { text = "✕"; setOnClickListener { Engine.stop(); hideControl() } }
-        listOf(handle, run, pause, close).forEach { panel.addView(it) }
+        val start = Button(this).apply {
+            text = "▶ START BOT"
+            setOnClickListener {
+                if (Engine.running.value) Engine.stop()
+                else Engine.startSequence(applicationContext, scripts)
+            }
+        }
+        val pause = Button(this).apply {
+            text = "⏸"
+            visibility = View.GONE
+            setOnClickListener { Engine.paused.value = !Engine.paused.value }
+        }
+        val close = Button(this).apply {
+            text = "✕"
+            setOnClickListener { Engine.stop(); hideBotLauncher() }
+        }
+        listOf(handle, start, pause, close).forEach { panel.addView(it) }
         panel.tag = CoroutineScope(Dispatchers.Main).launch {
             combine(Engine.running, Engine.paused) { r, p -> r to p }.collect { (r, p) ->
-                run.text = if (r) "■ STOP" else "▶ ${script.name}"
-                pause.visibility = if (r) View.VISIBLE else View.GONE; pause.text = if (p) "▶ Wznów" else "⏸" } }
-        wm.addView(panel, lp); ctrl = panel
+                start.text = if (r) "■ STOP" else "▶ START BOT"
+                pause.visibility = if (r) View.VISIBLE else View.GONE
+                pause.text = if (p) "▶ Wznów" else "⏸ Pauza"
+            }
+        }
+        wm.addView(panel, lp)
+        launcher = panel
     }
-    fun hideControl() = ui.post { ctrl?.let { (it.tag as? Job)?.cancel(); wm.removeView(it) }; ctrl = null }
+
+    fun hideBotLauncher() = ui.post {
+        launcher?.let { view ->
+            (view.tag as? Job)?.cancel()
+            runCatching { wm.removeView(view) }
+        }
+        launcher = null
+    }
 
     /** Najpierw mały panel z przyciskiem START: można przełączyć się na docelową aplikację, nagrywanie rusza po jego naciśnięciu. */
     fun record(done: (List<Step>) -> Unit) = ui.post {
