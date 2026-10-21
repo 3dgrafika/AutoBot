@@ -18,6 +18,18 @@ object Engine {
     fun log(s: String) { log.value = (log.value + "${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())} $s").takeLast(500) }
     fun stop() { job?.cancel() }
 
+    /** Uruchamia zaznaczone algorytmy kolejno jako jeden proces. */
+    fun startSequence(c: Context, names: List<String>) {
+        val scripts = Store.list(c).associateBy { it.name }
+        val selected = names.distinct().mapNotNull { scripts[it] }
+        if (selected.isEmpty()) { log("Brak zaznaczonych algorytmów"); return }
+        val sequence = Script("Cały bot", selected.map {
+            Step("macro", mutableMapOf("name" to it.name))
+        }.toMutableList())
+        start(c, sequence)
+    }
+
+
     fun start(c: Context, root: Script, maxSec: Int = 600, maxSteps: Int = 5000) {
         val svc = BotService.inst ?: run { log("Włącz usługę dostępności"); return }
         if (running.value) return

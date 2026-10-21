@@ -58,6 +58,45 @@ class BotService : AccessibilityService() {
 
     private var ctrl: View? = null
 
+    /** Pływająca nakładka PLAY/STOP dla wszystkich zaznaczonych algorytmów. */
+    fun showBotControls() = ui.post {
+        hideControl()
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(8, 6, 8, 6)
+            setBackgroundColor(0xDD222222.toInt())
+        }
+        val lp = LP(-2, -2, LP.TYPE_ACCESSIBILITY_OVERLAY, LP.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+            .apply { gravity = Gravity.TOP or Gravity.START; x = 16; y = 160 }
+        var ox = 0; var oy = 0; var dx = 0f; var dy = 0f
+        val handle = TextView(this).apply {
+            text = "☰"; textSize = 20f; setTextColor(Color.WHITE); setPadding(12, 8, 12, 8)
+            setOnTouchListener { _, e ->
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { ox = lp.x; oy = lp.y; dx = e.rawX; dy = e.rawY }
+                    MotionEvent.ACTION_MOVE -> {
+                        lp.x = (ox + e.rawX - dx).toInt(); lp.y = (oy + e.rawY - dy).toInt()
+                        runCatching { wm.updateViewLayout(panel, lp) }
+                    }
+                }; true
+            }
+        }
+        val play = Button(this).apply {
+            text = "▶ PLAY"
+            setOnClickListener {
+                if (!Engine.running.value) {
+                    Engine.startSequence(applicationContext, Store.enabledAlgorithms(applicationContext).toList())
+                }
+            }
+        }
+        val stop = Button(this).apply { text = "■ STOP"; setOnClickListener { Engine.stop() } }
+        val close = Button(this).apply { text = "✕"; setOnClickListener { Engine.stop(); hideControl() } }
+        listOf(handle, play, stop, close).forEach { panel.addView(it) }
+        wm.addView(panel, lp)
+        ctrl = panel
+    }
+
+
     /** Pływająca nakładka sterująca (przesuwana za uchwyt ☰): ▶ uruchom algorytm / ■ STOP, ⏸ pauza, ✕ zamknij. */
     fun showControl(script: Script) = ui.post {
         hideControl(); stopV?.let { wm.removeView(it) }; stopV = null

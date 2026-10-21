@@ -69,23 +69,72 @@ class MainActivity : ComponentActivity() {
 
 @Composable fun Scripts(a: MainActivity, open: (Script) -> Unit) {
     var list by remember { mutableStateOf(Store.list(a)) }
+    var enabledNames by remember { mutableStateOf(Store.enabledAlgorithms(a)) }
     val run by Engine.running.collectAsState()
+    fun refresh() { list = Store.list(a); enabledNames = Store.enabledAlgorithms(a) }
     fun newName(p: String): String { var n = 1; while (list.any { it.name == "$p$n" }) n++; return "$p$n" }
-    Column {
-        if (BotService.inst == null) Button({ a.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Włącz usługę dostępności (AutoBot)") }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button({ val s = Script(newName("algorytm")); Store.save(a, s); list = Store.list(a); open(s) }) { Text("Nowy") }
-            Button({ BotService.inst?.record { st -> if (st.isNotEmpty()) { Store.save(a, Script(newName("makro"), st.toMutableList())); list = Store.list(a) } }; a.moveTaskToBack(true) },
-                enabled = BotService.inst != null) { Text("Nagraj") }
-            if (run) Button({ Engine.stop() }) { Text("STOP") }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (BotService.inst == null) Button({ a.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
+            Text("Włącz usługę dostępności (AutoBot)")
         }
-        LazyColumn { items(list) { s -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("${s.name} (${s.steps.size})", Modifier.weight(1f).clickable { open(s) })
-            Button({ Engine.start(a, s) }, enabled = !run) { Text("▶") }
-            Button({ BotService.inst?.showControl(s); a.moveTaskToBack(true) }, enabled = BotService.inst != null) { Text("📌") }
-            TextButton({ Store.delete(a, s.name); list = Store.list(a) }) { Text("🗑") }
-            TextButton({ Store.save(a, Script(newName(s.name + "_kopia"), s.steps.toMutableList())); list = Store.list(a) }) { Text("⧉") }
-        } } }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({
+                val s = Script(newName("algorytm"))
+                Store.save(a, s); refresh(); open(s)
+            }) { Text("Nowy algorytm") }
+            Button({
+                BotService.inst?.record { st ->
+                    if (st.isNotEmpty()) {
+                        Store.save(a, Script(newName("makro"), st.toMutableList()))
+                        refresh()
+                    }
+                }
+                a.moveTaskToBack(true)
+            }, enabled = BotService.inst != null) { Text("Nagraj makro") }
+            Button({
+                Store.saveEnabledAlgorithms(a, enabledNames)
+                BotService.inst?.showBotControls()
+                a.moveTaskToBack(true)
+            }, enabled = BotService.inst != null) { Text("Start Bota") }
+        }
+        Text("Zaznacz algorytmy, które mają być wykonywane po kolei. Makra można wykorzystywać w blokach macro.",
+            style = MaterialTheme.typography.bodySmall)
+        LazyColumn {
+            items(list, key = { it.name }) { s ->
+                val isMacro = s.name.startsWith("makro", ignoreCase = true)
+                Card(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                        if (!isMacro) {
+                            Checkbox(
+                                checked = s.name in enabledNames,
+                                onCheckedChange = { checked ->
+                                    enabledNames = if (checked) enabledNames + s.name else enabledNames - s.name
+                                    Store.saveEnabledAlgorithms(a, enabledNames)
+                                }
+                            )
+                        } else {
+                            Spacer(Modifier.width(48.dp))
+                        }
+                        Column(Modifier.weight(1f).clickable { open(s) }) {
+                            Text(s.name)
+                            Text("${s.steps.size} bloków${if (isMacro) " · makro" else ""}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton({ open(s) }) { Text("Edytuj") }
+                        TextButton({
+                            Store.delete(a, s.name)
+                            enabledNames = enabledNames - s.name
+                            Store.saveEnabledAlgorithms(a, enabledNames)
+                            refresh()
+                        }) { Text("Usuń") }
+                        TextButton({
+                            Store.save(a, Script(newName(s.name + "_kopia"), s.steps.toMutableList()))
+                            refresh()
+                        }) { Text("Kopiuj") }
+                    }
+                }
+            }
+        }
+        if (run) Text("Bot działa…", color = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -94,9 +143,8 @@ class MainActivity : ComponentActivity() {
     Column {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button({ Store.save(a, s); close() }) { Text("Zapisz") }
-            Button({ Store.save(a, s); Engine.start(a, s) }) { Text("Zapisz ▶") }
-            Button({ Store.save(a, s); BotService.inst?.showControl(s); a.moveTaskToBack(true) }, enabled = BotService.inst != null) { Text("📌") }
-            Button({ Engine.stop() }) { Text("STOP") }
+            Button({ Store.save(a, s); close(); BotService.inst?.showBotControls(); a.moveTaskToBack(true) },
+                enabled = BotService.inst != null) { Text("Start Bota") }
         }
         key(ver) { LazyColumn { item { Steps(a, s.steps, 0) { ver++ } } } }
     }
@@ -104,9 +152,18 @@ class MainActivity : ComponentActivity() {
 
 @Composable fun Steps(a: MainActivity, l: MutableList<Step>, d: Int, ch: () -> Unit) {
     Column(Modifier.padding(start = (d * 12).dp)) {
-        l.toList().forEach { st ->
+        l.toList().forEachIndexed { index, st ->
             Card(Modifier.fillMaxWidth().padding(2.dp)) { Column(Modifier.padding(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Text(st.type, Modifier.weight(1f)); TextButton({ l.remove(st); ch() }) { Text("✕") } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(st.type, Modifier.weight(1f))
+                    TextButton(enabled = index > 0, onClick = {
+                        val item = l.removeAt(index); l.add(index - 1, item); ch()
+                    }) { Text("↑") }
+                    TextButton(enabled = index < l.lastIndex, onClick = {
+                        val item = l.removeAt(index); l.add(index + 1, item); ch()
+                    }) { Text("↓") }
+                    TextButton({ l.remove(st); ch() }) { Text("✕") }
+                }
                 if (st.type in setOf("tap", "swipe", "macro")) {
                     Button(onClick = {
                         val service = BotService.inst

@@ -16,6 +16,18 @@ object Store {
         runCatching { g.fromJson(it.readText(), Script::class.java) }.getOrNull() }.sortedBy { it.name }
     fun save(c: Context, s: Script) = File(dir(c, "scripts"), s.name + ".json").writeText(g.toJson(s))
     fun delete(c: Context, n: String) { File(dir(c, "scripts"), "$n.json").delete() }
+    private fun isAlgorithm(s: Script) = !s.name.startsWith("makro", ignoreCase = true)
+    fun enabledAlgorithms(c: Context): Set<String> {
+        val algorithms = list(c).filter { isAlgorithm(it) }.map { it.name }.toSet()
+        val prefs = c.getSharedPreferences("bot_settings", Context.MODE_PRIVATE)
+        val stored = prefs.getStringSet("enabled_algorithms", null)
+        return if (stored == null) algorithms else stored.intersect(algorithms)
+    }
+    fun saveEnabledAlgorithms(c: Context, names: Set<String>) {
+        c.getSharedPreferences("bot_settings", Context.MODE_PRIVATE).edit()
+            .putStringSet("enabled_algorithms", names.toSet()).apply()
+    }
+
     // Wzorce: patterns/<folder>/<nazwa>.png ; identyfikator wzorca = "folder/nazwa" (lub "nazwa" w katalogu głównym)
     private fun pdir(c: Context) = dir(c, "patterns")
     fun clean(n: String) = n.trim().replace(Regex("[^\\p{L}\\p{N}_ -]"), "_").take(40)
