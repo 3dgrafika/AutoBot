@@ -1,5 +1,9 @@
 package pl.bot
 import android.content.Intent
+import android.net.Uri
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.provider.Settings
@@ -161,8 +165,41 @@ class MainActivity : ComponentActivity() {
 
 @Composable fun PickerDialog(a: MainActivity, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     var folder by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf("") }
+    val phoneImagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val bitmap = a.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+                if (bitmap == null) {
+                    importError = "Nie udało się odczytać wybranego obrazu."
+                } else {
+                    val baseName = "telefon_${System.currentTimeMillis()}"
+                    val id = Store.join(folder, baseName)
+                    Store.savePattern(a, id, bitmap)
+                    bitmap.recycle()
+                    onPick(id)
+                }
+            } catch (e: Exception) {
+                importError = "Nie udało się zaimportować obrazu: ${e.message ?: "błąd odczytu"}"
+            }
+        }
+    }
     AlertDialog(onDismiss, confirmButton = { TextButton(onDismiss) { Text("Anuluj") } },
-        title = { Text("Wybierz wzorzec") }, text = { Browser(a, folder, { folder = it }, onPick) })
+        title = { Text("Wybierz wzorzec") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ phoneImagePicker.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("🖼 Wybierz obraz z telefonu")
+                }
+                Text("Obraz zostanie skopiowany do wzorców aplikacji.")
+                if (importError.isNotBlank()) Text(importError, color = MaterialTheme.colorScheme.error)
+                Browser(a, folder, { folder = it }, onPick)
+            }
+        })
 }
 
 @Composable fun NameDialog(title: String, done: (String?) -> Unit) {
