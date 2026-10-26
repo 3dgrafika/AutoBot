@@ -34,8 +34,11 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Android SDK (z akceptacją licencji)
-        uses: android-actions/setup-android@v3
+      # Runner ubuntu-latest ma już zainstalowany Android SDK (ANDROID_HOME). Dodatkowy krok setup-android
+      # niepotrzebnie próbuje doinstalować nieistniejący pakiet „tools” i kończy się błędem, więc go nie używamy.
+      # Gradle sam dociągnie brakujące platformy/build-tools; licencje akceptujemy tutaj (błąd „brak licencji” nie wystąpi).
+      - name: Akceptuj licencje Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       # Projekt nie zawiera Gradle Wrappera – wersję Gradle wskazujemy tutaj (AGP 8.5.2 wymaga Gradle ≥ 8.7).
       - name: Gradle
