@@ -384,6 +384,8 @@ class FloatingAction(
         }
     }
 
+    fun setLabel(t: String) { main.text = t }
+
     fun show() {
         if (attached) return
         wm.addView(root, lp)

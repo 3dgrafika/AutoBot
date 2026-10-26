@@ -557,7 +557,7 @@ private fun BlockCard(
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clip(RoundedCornerShape(6.dp)).background(block.color())) {
     Box(Modifier.width(5.dp).fillMaxHeight().background(block.accent()))
     Column(Modifier.weight(1f)) {
-        Row(Modifier.fillMaxWidth().clickable { editing = true }.padding(start = 2.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().clickable { editing = true }.padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { editing = true }) {
                 Text(block.title(), fontWeight = FontWeight.Bold, fontSize = 12.sp, color = fg)
                 if (summary.isNotEmpty()) {
@@ -575,7 +575,7 @@ private fun BlockCard(
             if (block.isContainer()) {
                 MiniIcon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, "Zwiń/rozwiń", fg) { expanded = !expanded }
             }
-            // uchwyt przeciągania: przytrzymaj i przesuń blok w górę / w dół
+            // uchwyt przeciągania (po prawej stronie karty): przytrzymaj i przesuń blok w górę / w dół
             Icon(
                 Icons.Default.DragHandle, "Przeciągnij blok",
                 Modifier.size(30.dp).padding(3.dp)
@@ -646,10 +646,29 @@ private fun AddBlockDialog(onDismiss: () -> Unit, onPick: (Block) -> Unit) {
 
 /** Przycisk uruchamiający pobieranie współrzędnych fizycznym dotknięciem ekranu. */
 @Composable
-private fun PickButton(app: App, wantSwipe: Boolean, hasCoordinates: Boolean = false) {
+private fun PickButton(app: App, wantSwipe: Boolean, current: List<Pair<Int, Int>>?) {
     val ctx = LocalContext.current
+    if (current != null) {
+        // współrzędne są już ustawione → pokaż je na ekranie jako przeciągalne celowniki
+        AppButton("✎ EDYTUJ NA EKRANIE", Primary, Modifier.fillMaxWidth()) {
+            val svc = BotAccessibilityService.instance
+            if (svc == null) {
+                ctx.toast("Najpierw włącz usługę dostępności")
+            } else {
+                app.coordPick.value = null
+                if (svc.startCoordinateEdit(current, wantSwipe)) ctx.findActivity()?.moveTaskToBack(true)
+            }
+        }
+        Text(
+            "Aplikacja się zminimalizuje i pokaże aktualną pozycję na ekranie. Przejdź na właściwy ekran, " +
+                (if (wantSwipe) "przeciągnij celowniki 1 (początek) i 2 (koniec)" else "przeciągnij celownik w docelowe miejsce") +
+                " i naciśnij zielony przycisk.",
+            fontSize = 11.sp, color = Muted
+        )
+        return
+    }
     AppButton(
-        if (hasCoordinates) "✥ EDYTUJ NA EKRANIE" else if (wantSwipe) "● POBIERZ PRZESUNIĘCIE Z EKRANU" else "● POBIERZ KLIKNIĘCIE Z EKRANU",
+        if (wantSwipe) "● POBIERZ PRZESUNIĘCIE Z EKRANU" else "● POBIERZ KLIKNIĘCIE Z EKRANU",
         Danger, Modifier.fillMaxWidth()
     ) {
         val svc = BotAccessibilityService.instance
@@ -700,9 +719,15 @@ private fun BlockEditDialog(
         val p = pick ?: return@LaunchedEffect
         if (p.ts < openedAt) return@LaunchedEffect
         when (val d = draft) {
-            is TapBlock -> draft = d.copy(x = p.x1, y = p.y1, durationMs = if (p.durationMs >= 500) p.durationMs else d.durationMs)
+            is TapBlock -> draft = d.copy(
+                x = p.x1, y = p.y1,
+                durationMs = if (!p.keepDuration && p.durationMs >= 500) p.durationMs else d.durationMs
+            )
             is SwipeBlock -> if (p.isSwipe) {
-                draft = d.copy(x1 = p.x1, y1 = p.y1, x2 = p.x2, y2 = p.y2, durationMs = p.durationMs.coerceAtLeast(100))
+                draft = d.copy(
+                    x1 = p.x1, y1 = p.y1, x2 = p.x2, y2 = p.y2,
+                    durationMs = if (p.keepDuration) d.durationMs else p.durationMs.coerceAtLeast(100)
+                )
             }
             else -> Unit
         }
@@ -725,13 +750,17 @@ private fun BlockEditDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 when (val d = draft) {
                     is TapBlock -> key(pickVersion) {
-                        PickButton(app, wantSwipe = false, hasCoordinates = d.x != 0 || d.y != 0)
+                        // „współrzędne już są” = inne niż domyślne wartości nowego bloku
+                        val def = TapBlock()
+                        PickButton(app, wantSwipe = false, current = if (d.x != def.x || d.y != def.y) listOf(d.x to d.y) else null)
                         NumField("X (px)", d.x.toLong()) { draft = d.copy(x = it.toInt()) }
                         NumField("Y (px)", d.y.toLong()) { draft = d.copy(y = it.toInt()) }
                         NumField("Czas dotyku (ms) – >500 = przytrzymanie", d.durationMs) { draft = d.copy(durationMs = it) }
                     }
                     is SwipeBlock -> key(pickVersion) {
-                        PickButton(app, wantSwipe = true, hasCoordinates = d.x1 != 0 || d.y1 != 0 || d.x2 != 0 || d.y2 != 0)
+                        val def = SwipeBlock()
+                        val hasPos = d.x1 != def.x1 || d.y1 != def.y1 || d.x2 != def.x2 || d.y2 != def.y2
+                        PickButton(app, wantSwipe = true, current = if (hasPos) listOf(d.x1 to d.y1, d.x2 to d.y2) else null)
                         NumField("Start X", d.x1.toLong()) { draft = d.copy(x1 = it.toInt()) }
                         NumField("Start Y", d.y1.toLong()) { draft = d.copy(y1 = it.toInt()) }
                         NumField("Koniec X", d.x2.toLong()) { draft = d.copy(x2 = it.toInt()) }

@@ -98,6 +98,7 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
         cancelPick()
         hideActionPill()
         stepCtl?.leave()
+        hideCoordEdit()
         markerOverlay?.dispose()
         app.engine.markers = null
         panel?.hide()
@@ -166,19 +167,22 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
             val test = panelTestId
             if (e.state.value == BotState.PAUSED) e.resume()
             else if (e.state.value == BotState.IDLE) {
-                if (stepCtl?.continueFromCurrent() != true) {
-                    if (test != null) e.runAlgorithmOnce(test) else e.startSelected()
-                }
+                // w trybie krokowym ▶ kontynuuje od kroku z kursora (np. 7/20), a nie od początku
+                val from = stepCtl?.resumePoint()
+                stepCtl?.leave()
+                if (from != null) e.runAlgorithmOnce(from.first, from.second)
+                else if (test != null) e.runAlgorithmOnce(test)
+                else e.startSelected()
             }
         },
         onPause = { app.engine.pause() },
         onStop = { app.engine.stop() },
         onClose = {
-            // ✕ zamyka panel i wraca do okna AutoBota
+            // ✕ zamyka panel i wraca do okna AutoBota (do edytora testowanego algorytmu)
             stepCtl?.leave()
-            panel?.hide()
+            val id = panelTestId
             panelTestId = null
-            bringAppToFront()
+            returnToApp(id) { panel?.hide() }
         },
         onRecordSave = { finishRecording(true) },
         onRecordCancel = { finishRecording(false) },
@@ -224,7 +228,7 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
         actionPill = FloatingAction(
             ctx = this, wm = wm, label = "● ROZPOCZNIJ NAGRYWANIE", color = "#D1453B",
             onClick = { beginRecording() },
-            onCancel = { hideActionPill(); bringAppToFront() },
+            onCancel = { returnToApp { hideActionPill() } },
         ).also { it.show() }
         performGlobalAction(GLOBAL_ACTION_HOME)
         toast("Przejdź do właściwej aplikacji i naciśnij „ROZPOCZNIJ NAGRYWANIE”")
@@ -388,13 +392,23 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
         actionPill = null
     }
 
-    private fun bringAppToFront() {
+    private fun bringAppToFront(algorithmId: String? = null) {
         runCatching {
             startActivity(
                 Intent(this, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    .apply { if (algorithmId != null) putExtra("algorithm", algorithmId) }
             )
         }
+    }
+
+    /**
+     * Wraca do AutoBota, a dopiero chwilę później usuwa własne okna nakładki. Dopóki nakładka jest widoczna,
+     * system pozwala usłudze uruchomić aktywność z tła – gdyby okno zniknęło wcześniej, start mógłby zostać zablokowany.
+     */
+    private fun returnToApp(algorithmId: String? = null, cleanup: () -> Unit) {
+        bringAppToFront(algorithmId)
+        mainHandler.postDelayed({ cleanup() }, 350)
     }
 
     /** Pokazuje pływający przycisk „ZRÓB ZRZUT”. Zrzut powstaje dopiero po jego naciśnięciu. */
@@ -405,7 +419,7 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
         actionPill = FloatingAction(
             ctx = this, wm = wm, label = "📷 ZRÓB ZRZUT", color = "#2F5BEA",
             onClick = { takePatternShot() },
-            onCancel = { hideActionPill(); bringAppToFront() },
+            onCancel = { returnToApp { hideActionPill() } },
         ).also { it.show() }
         toast("Przejdź na właściwy ekran i naciśnij „ZRÓB ZRZUT”")
         return true
@@ -448,7 +462,7 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
             label = if (wantSwipe) "● ZAREJESTRUJ PRZESUNIĘCIE" else "● ZAREJESTRUJ KLIKNIĘCIE",
             color = "#C95A57",
             onClick = { beginPick(wantSwipe) },
-            onCancel = { hideActionPill(); bringAppToFront() },
+            onCancel = { returnToApp { hideActionPill() } },
         ).also { it.show() }
         toast("Przejdź na właściwy ekran i naciśnij czerwony przycisk")
         return true
@@ -471,7 +485,7 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
         // przycisk anulowania dodany po nakładce, więc leży nad nią
         actionPill = FloatingAction(
             ctx = this, wm = wm, label = "✕ ANULUJ", color = "#55657A",
-            onClick = { cancelPick(); bringAppToFront() },
+            onClick = { returnToApp { cancelPick() } },
             onCancel = null,
         ).also { it.show() }
     }
@@ -479,7 +493,63 @@ class BotAccessibilityService : AccessibilityService(), DeviceIO {
     private fun cancelPick() {
         pickView?.let { runCatching { wm.removeView(it) } }
         pickView = null
+        hideCoordEdit()
         if (actionPill != null) hideActionPill()
+    }
+
+    /* ───────────────── Edycja istniejącej pozycji na ekranie ───────────────── */
+
+    private var coordEditor: PositionEditor? = null
+
+    private fun hideCoordEdit() {
+        coordEditor?.hide()
+        coordEditor = null
+    }
+
+    /**
+     * „EDYTUJ NA EKRANIE”: pokazuje aktualną pozycję kliknięcia (albo początek i koniec przesunięcia) jako przeciągalne
+     * celowniki – tak samo jak w trybie krokowym. Zielony przycisk zapisuje wynik w edytowanym bloku (przez [App.coordPick]).
+     */
+    fun startCoordinateEdit(points: List<Pair<Int, Int>>, wantSwipe: Boolean): Boolean {
+        if (app.engine.isActive) { toast("Najpierw zatrzymaj bota"); return false }
+        if (points.isEmpty()) return false
+        cancelPick()
+        hideActionPill()
+        stepCtl?.leave()
+        val pts = points.toMutableList()
+        fun caption() = if (wantSwipe) "✔ ZAPISZ PRZESUNIĘCIE" else "✔ ZAPISZ (${pts[0].first}, ${pts[0].second})"
+        val ed = PositionEditor(this, wm) { screenSize() }
+        coordEditor = ed
+        var pill: FloatingAction? = null
+        ed.show(
+            pts, 0,
+            onSelect = { },
+            onMoved = { i, x, y ->
+                if (i in pts.indices) pts[i] = x to y
+                pill?.setLabel(caption())
+            },
+        )
+        // przycisk dodany po celownikach – leży nad nimi i nie da się go przykryć
+        pill = FloatingAction(
+            ctx = this, wm = wm, label = caption(), color = "#2EA043",
+            onClick = { finishCoordEdit(pts, wantSwipe) },
+            onCancel = { returnToApp { cancelPick() } },
+        ).also { it.show() }
+        actionPill = pill
+        toast(if (wantSwipe) "Przeciągnij celowniki 1 i 2, potem naciśnij zielony przycisk" else "Przeciągnij celownik, potem naciśnij zielony przycisk")
+        return true
+    }
+
+    private fun finishCoordEdit(pts: List<Pair<Int, Int>>, wantSwipe: Boolean) {
+        val a = pts[0]
+        val b = if (wantSwipe && pts.size > 1) pts[1] else a
+        val g = PickedGesture(
+            x1 = a.first, y1 = a.second, x2 = b.first, y2 = b.second,
+            durationMs = 0L, isSwipe = wantSwipe, keepDuration = true,
+        )
+        app.coordPick.value = g
+        app.repo.log("INFO", "Edytowano pozycję na ekranie: (${g.x1}, ${g.y1})" + if (wantSwipe) " → (${g.x2}, ${g.y2})" else "")
+        returnToApp { cancelPick() }
     }
 
     private fun finishPick(g: PickedGesture) {

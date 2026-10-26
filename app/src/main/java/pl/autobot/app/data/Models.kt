@@ -230,6 +230,7 @@ data class PickedGesture(
     val x1: Int, val y1: Int, val x2: Int, val y2: Int,
     val durationMs: Long, val isSwipe: Boolean,
     val ts: Long = System.currentTimeMillis(),
+    val keepDuration: Boolean = false,      // true = edycja pozycji na ekranie: zostaw czas z bloku
 )
 
 /* ───────────── Kopia zapasowa ───────────── */

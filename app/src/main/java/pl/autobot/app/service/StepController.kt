@@ -41,6 +41,7 @@ class StepController(
     private var editPoint = 0                     // który punkt przesunięcia poruszają strzałki (0 = początek, 1 = koniec)
     private var nudgeStep = 5                     // skok strzałek w pikselach
     private var sheet = Sheet.NONE
+    private var autoSheet = false                 // menu korekty otwarte automatycznie przy kroku CZEKAJ
 
     /* ───────── podłączenie do algorytmu ───────── */
 
@@ -53,17 +54,12 @@ class StepController(
         panel.setStepAvailable(id != null && alg != null)
     }
 
-    /** ▶ w trybie krokowym kontynuuje od kursora zamiast resetować algorytm. */
-    fun continueFromCurrent(): Boolean {
-        if (!active || algId == null) return false
-        scope.launch {
-            if (busy) { toast("Trwa wykonywanie kroku"); return@launch }
-            val list = steps() ?: return@launch
-            val i = cursorIndex(list)
-            if (i >= list.size) { toast("Algorytm zakończony"); return@launch }
-            execute(list, i)
-        }
-        return true
+    /** Gdy tryb krokowy jest włączony: (algorytm, ścieżka kroku z kursora) – ▶ ma kontynuować od tego miejsca. */
+    fun resumePoint(): Pair<String, List<Int>>? {
+        if (!active) return null
+        val id = algId ?: return null
+        val p = cursorPath ?: return null
+        return if (currentAlg()?.blocks?.blockAt(p) != null) id to p else null
     }
 
     /** Wyłącza tryb krokowy (znikają uchwyty i menu); kursor zostaje zapamiętany. */
@@ -105,7 +101,8 @@ class StepController(
     fun onMenu() {
         scope.launch {
             if (busy) { toast("Trwa wykonywanie kroku"); return@launch }
-            if (panel.sheetShown) { sheet = Sheet.NONE; panel.hideSheet(); return@launch }
+            // ☰ przy automatycznie otwartym menu czasu (krok CZEKAJ) otwiera pełne menu; w pozostałych przypadkach je zamyka
+            if (panel.sheetShown && !(autoSheet && sheet == Sheet.CORRECTION)) { sheet = Sheet.NONE; panel.hideSheet(); return@launch }
             if (!active && !enter()) return@launch
             refresh()
             showMainMenu()
@@ -173,7 +170,7 @@ class StepController(
         return when {
             steps.isEmpty() -> "Algorytm jest pusty\n☰ → dodaj pierwszy krok"
             cur == null -> "Koniec algorytmu ✓ (${steps.size} kroków)\n⏮ cofnij · ☰ menu"
-            else -> "Następny: krok ${i + 1}/${steps.size}\n${describe(cur.block)}\n⏭ wykonaj · ⏮ cofnij · ☰ menu"
+            else -> "Następny: krok ${i + 1}/${steps.size}\n${describe(cur.block)}\n⏭ krok · ⏮ cofnij · ▶ dalej stąd · ☰ menu"
         }
     }
 
@@ -193,6 +190,13 @@ class StepController(
             is TapBlock -> showHandles(listOf(b.x to b.y))
             is SwipeBlock -> showHandles(listOf(b.x1 to b.y1, b.x2 to b.y2))
             else -> Unit
+        }
+        // krok CZEKAJ: od razu pokaż przyciski zmiany czasu (te same co w menu „Koryguj pozycję i czas”)
+        if (steps.getOrNull(i)?.block is WaitBlock) {
+            if (sheet == Sheet.NONE || sheet == Sheet.CORRECTION) { autoSheet = true; showCorrection() }
+        } else if (autoSheet) {
+            autoSheet = false
+            if (sheet == Sheet.CORRECTION) { sheet = Sheet.NONE; panel.hideSheet() }
         }
     }
 
@@ -372,6 +376,7 @@ class StepController(
     /* ───────── menu w panelu ───────── */
 
     private fun showMainMenu() {
+        autoSheet = false
         val steps = steps() ?: return
         val i = cursorIndex(steps)
         val cur = steps.getOrNull(i)

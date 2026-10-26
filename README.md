@@ -39,7 +39,12 @@ Interfejs odwzorowuje prototyp Figma `Auto_bot.fig`: zakładki **BOT**, **Skrypt
   * `⏮` – cofa kursor o jeden krok **bez wykonywania** (np. by powtórzyć krok po korekcie; stanu aplikacji docelowej nie da się cofnąć),
   * pierwsze naciśnięcie `⏮`/`⏭`/`☰` tylko włącza tryb krokowy i pokazuje bieżący krok. Jeśli w tym czasie trwa zwykły test (`▶`),
     zostanie wstrzymany, a kursor stanie na kroku, na którym się zatrzymał,
-  * `▶` uruchamia cały test od początku (i kończy tryb krokowy).
+  * `▶` w trybie krokowym **kontynuuje od kroku z kursora** (np. od 7/20), a nie od początku – także wewnątrz pętli (dokończy bieżącą
+    iterację i pętla działa dalej normalnie), bloku JEŻELI (wejście do gałęzi bez sprawdzania warunku) i innych kontenerów. Poza trybem
+    krokowym `▶` startuje test od początku. Test uruchamiany z panelu rusza **od razu** (bez odliczania z Ustawień; odliczanie dotyczy już tylko zwykłego URUCHOM BOTA),
+  * przy kroku **CZEKAJ** panel od razu pokazuje przyciski zmiany czasu (−1 s, −100, +100, +1 s) – te same co w menu „Koryguj pozycję i czas”;
+    `☰` otwiera wtedy pełne menu,
+  * `✕` zamyka panel i wraca do AutoBota (do edytora testowanego algorytmu).
   * Kontenery nie są wykonywane jako całość: JEŻELI tylko sprawdza warunek (wynik w logach) i tryb krokowy przechodzi przez
     **obie** gałęzie; PĘTLA, DLA KAŻDEGO, O DACIE, POWTARZAJ – jedno przejście przez zawartość; PRZERWIJ/POMIŃ/ZATRZYMAJ są pomijane.
 * **Menu ☰** (wysuwa się pod przyciskami panelu):
@@ -56,6 +61,12 @@ Interfejs odwzorowuje prototyp Figma `Auto_bot.fig`: zakładki **BOT**, **Skrypt
   * pozycje zapisane w algorytmie są pozycjami zadanymi – realne kliknięcie nadal podlega losowemu przesunięciu z Ustawień (znacznik pokazuje
     miejsce faktycznego kliknięcia). Czasy z bloków CZEKAJ również dostają losowy dodatek.
   * Przed wykonaniem kroku celowniki chowają się (leżą dokładnie w miejscu kliknięcia i przechwyciłyby dotyk).
+
+### Edycja współrzędnych bloków KLIKNIJ / PRZESUŃ
+W oknie bloku przycisk **● POBIERZ … Z EKRANU** służy do pierwszego wskazania miejsca. Gdy współrzędne są już ustawione (inne niż domyślne wartości
+nowego bloku), zamienia się w **✎ EDYTUJ NA EKRANIE**: aplikacja się minimalizuje i pokazuje aktualną pozycję jako przeciągalne celowniki
+(przesunięcie: 1 = początek, 2 = koniec) – dokładnie jak w trybie krokowym. Zielony przycisk zapisuje nową pozycję w oknie bloku, ✕ anuluje.
+Czas dotyku / przesunięcia zostaje bez zmian.
 
 ### Bloki
 JEŻELI wzorzec istnieje / nie istnieje · ZNAJDŹ WZORZEC I KLIKNIJ GO · MAKRO · CZEKAJ · PRZESUŃ · KLIKNIJ · PĘTLA · PRZERWIJ PĘTLĘ · POMIŃ ITERACJĘ ·
@@ -112,12 +123,32 @@ okna `TYPE_ACCESSIBILITY_OVERLAY` (nagrywanie i panel – bez uprawnienia „nad
 Zmienne i liczniki, operatory logiczne/matematyczne, skalowanie wzorców między rozdzielczościami (np. OpenCV), wiele równoległych algorytmów,
 harmonogram działający w tle przy wyłączonym ekranie (bloki daty/powtarzania wymagają włączonego, odblokowanego telefonu).
 
+## Budowanie przez GitHub (Actions)
+Repozytorium zawiera workflow `.github/workflows/build-apk.yml`, który buduje APK bez Android Studio.
 
-## Budowanie APK przez GitHub Actions
+1. Załóż repozytorium na GitHubie i wyślij do niego **zawartość folderu `AutoBot`** (plik `build.gradle.kts` ma być w głównym katalogu repozytorium):
+   ```
+   cd AutoBot
+   git init -b main
+   git add .
+   git commit -m "AutoBot 0.3.0"
+   git remote add origin https://github.com/<twoja-nazwa>/<repozytorium>.git
+   git push -u origin main
+   ```
+2. Wejdź w zakładkę **Actions** → *Build APK* (rusza sam po każdym pushu; można też **Run workflow** ręcznie).
+3. Po zakończeniu (kilka minut) otwórz przebieg i pobierz **artefakt `AutoBot-apk`** (ZIP z `AutoBot-debug.apk`). Rozpakuj, wgraj na telefon i zainstaluj
+   (wymaga zgody na instalację z nieznanych źródeł). `AutoBot-debug.apk` jest podpisany kluczem debug – wystarczy do codziennego użytku, ale
+   aktualizacja z innego źródła podpisu wymaga odinstalowania poprzedniej wersji.
+4. **Release z plikiem APK**: utwórz tag, np. `git tag v0.3.0 && git push origin v0.3.0` – workflow opublikuje Release z załączonym APK.
 
-1. Utwórz repozytorium na GitHub i wgraj zawartość katalogu `AutoBot` (nie sam plik ZIP).
-2. Upewnij się, że workflow `.github/workflows/android.yml` znajduje się w repozytorium.
-3. Po `push` do gałęzi `main`/`master` lub po uruchomieniu z zakładki **Actions → Android APK → Run workflow**, GitHub zbuduje aplikację.
-4. APK pobierzesz z sekcji **Artifacts** w szczegółach zakończonego uruchomienia workflow.
+### Własny podpis (opcjonalnie)
+Aby dostawać podpisany `AutoBot-release.apk` (stały klucz → aktualizacje bez odinstalowywania), wygeneruj klucz raz:
+```
+keytool -genkeypair -v -keystore autobot.jks -alias autobot -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 autobot.jks      # (macOS: base64 -i autobot.jks)
+```
+i w **Settings → Secrets and variables → Actions** dodaj: `KEYSTORE_BASE64` (wynik base64), `KEYSTORE_PASSWORD`, `KEY_ALIAS` (np. `autobot`), `KEY_PASSWORD`.
+Plik `.jks` zachowaj w bezpiecznym miejscu i **nigdy nie wrzucaj go do repozytorium** (`.gitignore` go pomija).
 
-Workflow używa JDK 17 i Gradle 8.9 oraz buduje wariant debug (`assembleDebug`).
+> Projekt nie zawiera Gradle Wrappera (workflow instaluje Gradle 8.9 samodzielnie). Android Studio wygeneruje wrapper przy pierwszym otwarciu –
+> możesz go wtedy dodać do repozytorium, ale workflow działa i bez niego.

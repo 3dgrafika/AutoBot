@@ -92,6 +92,7 @@ class BotEngine(
     val currentPos = MutableStateFlow<Pair<String, List<Int>>?>(null)
 
     @Volatile private var testMode = false          // true = TESTUJ / tryb krokowy (wtedy pokazujemy znaczniki)
+    @Volatile private var resume: List<Int>? = null // ścieżka kroku, od którego algorytm ma kontynuować (null = od początku)
     @Volatile private var stepLabel: String? = null // opis kroku pokazywany przy znaczniku w trybie krokowym
     private var trackId: String? = null             // algorytm, którego pozycję śledzimy w [currentPos]
 
@@ -115,10 +116,22 @@ class BotEngine(
         launch("zestaw algorytmów (${ids.size})", repo.settings.value.startDelaySec) { runAlgorithms(ids) }
     }
 
-    /** Jednorazowe uruchomienie wybranego algorytmu (przycisk TESTUJ w edytorze). */
-    fun runAlgorithmOnce(algorithmId: String) {
+    /**
+     * Jednorazowe uruchomienie wybranego algorytmu (test z pływającego panelu) – od razu, bez odliczania.
+     * [startPath] (ścieżka bloku, patrz StepTree.kt) = kontynuacja od tego kroku zamiast od początku;
+     * bloki wcześniejsze są pomijane, a kontenery (pętla, JEŻELI…) zawierające ten krok są wchodzone bez sprawdzania warunku.
+     */
+    fun runAlgorithmOnce(algorithmId: String, startPath: List<Int>? = null) {
         val a = repo.algorithms.value.firstOrNull { it.id == algorithmId } ?: return
-        launch("test algorytmu „${a.name}”", 0, test = true) { runAlgorithms(listOf(a.id)) }
+        val title = if (startPath == null) "test algorytmu „${a.name}”" else "test algorytmu „${a.name}” – kontynuacja od wskazanego kroku"
+        launch(title, 0, test = true) {
+            resume = startPath
+            try {
+                runAlgorithms(listOf(a.id))
+            } finally {
+                resume = null
+            }
+        }
     }
 
     /**
@@ -130,7 +143,7 @@ class BotEngine(
         launch("krok", 0, test = true, quiet = true, stepName = label, onEnd = onEnd) { execStepBlock(block) }
 
     fun testPattern(patternId: String) {
-        launch("test wzorca", 0) {
+        launch("test wzorca", maxOf(4, repo.settings.value.startDelaySec)) {
             val r = find(patternId, null, minScore = 0.5f, max = 1)
             val best = r.matches.firstOrNull()
             if (best == null) {
@@ -194,6 +207,7 @@ class BotEngine(
         testMode = test
         stepLabel = stepName
         trackId = null
+        resume = null
         currentPos.value = null
         state.value = BotState.RUNNING
         job = scope.launch {
@@ -257,7 +271,34 @@ class BotEngine(
 
     /** [path] = ścieżka listy (do śledzenia pozycji w [currentPos]); null = nie śledzimy (podalgorytm, tryb krokowy). */
     private suspend fun execBlocks(blocks: List<Block>, path: List<Int>? = null) {
-        for ((i, b) in blocks.withIndex()) execBlock(b, path?.plus(i))
+        var start = 0
+        val r = resume
+        // kontynuacja od kroku: na liście leżącej na ścieżce do kroku pomijamy bloki stojące przed nim
+        if (path != null && r != null && r.size > path.size && r.subList(0, path.size) == path) {
+            start = r[path.size].coerceIn(0, blocks.size)
+            if (r.size == path.size + 1) resume = null     // dotarliśmy do samego kroku
+        }
+        for (i in start until blocks.size) execBlock(blocks[i], path?.plus(i))
+    }
+
+    /** Czy kontener o ścieżce [path] zawiera krok, od którego kontynuujemy (wchodzimy do niego bez sprawdzania warunku). */
+    private fun onResumePath(path: List<Int>?): Boolean {
+        val r = resume ?: return false
+        return path != null && r.size > path.size && r.subList(0, path.size) == path
+    }
+
+    /** Jedno wykonanie zawartości kontenera; false = PRZERWIJ PĘTLĘ. */
+    private suspend fun runBodyOnce(body: List<Block>, path: List<Int>?): Boolean {
+        try {
+            execBlocks(body, path?.plus(0))
+            return true
+        } catch (sig: ControlSignal) {
+            return when (sig.kind) {
+                SignalKind.BREAK -> false
+                SignalKind.CONTINUE -> true
+                else -> throw sig
+            }
+        }
     }
 
     private suspend fun execBlock(b: Block, path: List<Int>? = null) {
@@ -287,8 +328,14 @@ class BotEngine(
             }
             is FindClickBlock -> execFindClick(b)
             is IfPatternBlock -> {
-                val cond = evalIf(b)
-                execBlocks(if (cond) b.thenBlocks else b.elseBlocks, path?.plus(if (cond) 0 else 1))
+                val r = resume
+                if (path != null && r != null && onResumePath(path)) {
+                    val br = r[path.size]
+                    execBlocks(if (br == 0) b.thenBlocks else b.elseBlocks, path.plus(br))
+                } else {
+                    val cond = evalIf(b)
+                    execBlocks(if (cond) b.thenBlocks else b.elseBlocks, path?.plus(if (cond) 0 else 1))
+                }
             }
             is LoopBlock -> execLoop(b, path)
             is AlgorithmBlock -> {
@@ -305,6 +352,10 @@ class BotEngine(
             }
             is ForEachPatternBlock -> execForEach(b, path)
             is AtTimeBlock -> {
+                if (onResumePath(path)) {
+                    execBlocks(b.body, path?.plus(0))
+                    return
+                }
                 val now = System.currentTimeMillis()
                 if (b.atMs <= now) {
                     if (b.ifPast == PastAction.SKIP) {
@@ -396,6 +447,7 @@ class BotEngine(
     }
 
     private suspend fun execLoop(b: LoopBlock, path: List<Int>?) {
+        val resuming = onResumePath(path)
         val s = repo.settings.value
         if (s.limitLoopEnabled && b.mode == LoopMode.COUNT && b.count > s.maxLoopIterations)
             throw BotError("Pętla ${b.count}× przekracza limit ${s.maxLoopIterations} iteracji (Ustawienia → limity)")
@@ -413,6 +465,12 @@ class BotEngine(
             }
         )
         var i = 0
+        if (resuming) {                      // kontynuacja w środku pętli: dokończ tę iterację, potem pętla działa normalnie
+            i = 1
+            repo.log("INFO", "PĘTLA: kontynuacja w iteracji 1")
+            if (!runBodyOnce(b.body, path)) return
+            sleep(50)
+        }
         while (true) {
             checkpoint()
             when (b.mode) {
@@ -451,10 +509,16 @@ class BotEngine(
 
     /** DLA KAŻDEGO wzorca z zestawu – patrz [ForEachPatternBlock]. Po każdym elemencie ekran jest skanowany od nowa. */
     private suspend fun execForEach(b: ForEachPatternBlock, path: List<Int>?) {
+        val resuming = onResumePath(path)
         if (b.patternIds.isEmpty()) throw BotError("Blok DLA KAŻDEGO WZORCA: dodaj co najmniej jeden wzorzec do zestawu")
         val s = repo.settings.value
         val limit = if (s.limitLoopEnabled) minOf(b.maxIterations, s.maxLoopIterations) else Int.MAX_VALUE
         var i = 0
+        if (resuming) {
+            i = 1
+            if (!runBodyOnce(b.body, path)) return
+            sleep(100)
+        }
         while (true) {
             checkpoint()
             status.value = "Szukam wzorców z zestawu…"
@@ -487,9 +551,18 @@ class BotEngine(
 
     /** POWTARZAJ CO…: stały rytm liczony od startu poprzedniego uruchomienia (bez dryfu). */
     private suspend fun execRepeat(b: RepeatEveryBlock, path: List<Int>?) {
+        val resuming = onResumePath(path)
         val interval = b.every.coerceAtLeast(1) * b.unit.ms
         var run = 0
         var next = System.currentTimeMillis() + if (b.runFirstNow) 0L else interval
+        if (resuming) {                      // kontynuacja w środku cyklu: dokończ go, następny wg normalnego rytmu
+            val t0 = System.currentTimeMillis()
+            run = 1
+            repo.log("INFO", "POWTARZAJ: kontynuacja w uruchomieniu #1")
+            if (!runBodyOnce(b.body, path)) return
+            next = t0 + interval
+            if (next < System.currentTimeMillis()) next = System.currentTimeMillis()
+        }
         while (true) {
             if (b.maxRuns > 0 && run >= b.maxRuns) {
                 repo.log("INFO", "POWTARZAJ: wykonano zaplanowane $run uruchomień")

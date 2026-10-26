@@ -13,11 +13,27 @@ android {
         applicationId = "pl.autobot.app"
         minSdk = 30            // AccessibilityService.takeScreenshot() wymaga Androida 11+
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
+    }
+    // Podpis wydania: tylko gdy podano klucz w zmiennych środowiskowych (GitHub Actions → Secrets, patrz README).
+    // Bez nich assembleRelease da niepodpisany APK, a assembleDebug (podpisany kluczem debug) jest od razu instalowalny.
+    val keystorePath: String? = System.getenv("KEYSTORE_FILE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
