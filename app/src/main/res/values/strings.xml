@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AutoBot</string>
+    <string name="accessibility_description">AutoBot wykonuje kliknięcia i przesunięcia oraz robi zrzuty ekranu, aby automatyzować czynności w innych aplikacjach według algorytmów ustawionych przez Ciebie. Usługa nie odczytuje treści ekranu i nie wysyła żadnych danych poza urządzenie.</string>
+</resources>
